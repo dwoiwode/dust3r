@@ -5,26 +5,30 @@
 # gradio demo
 # --------------------------------------------------------
 import argparse
-import math
 import builtins
-import datetime
-import gradio
-import os
-import torch
-import numpy as np
-import functools
-import trimesh
 import copy
+import datetime
+import functools
+import math
+import os
+from pathlib import Path
+from zipfile import ZipFile, ZIP_DEFLATED
+
+import gradio
+import matplotlib.pyplot as pl
+import numpy as np
+import torch
+import trimesh
 from scipy.spatial.transform import Rotation
 
-from dust3r.inference import inference
-from dust3r.image_pairs import make_pairs
-from dust3r.utils.image import load_images, rgb
-from dust3r.utils.device import to_numpy
-from dust3r.viz import add_scene_cam, CAM_COLORS, OPENGL, pts3d_to_trimesh, cat_meshes
 from dust3r.cloud_opt import global_aligner, GlobalAlignerMode
-
-import matplotlib.pyplot as pl
+from dust3r.cloud_opt.base_opt import BasePCOptimizer
+from dust3r.image_pairs import make_pairs
+from dust3r.inference import inference
+from dust3r.utils.device import to_numpy
+from dust3r.utils.export import save_to_colmap
+from dust3r.utils.image import load_images, rgb
+from dust3r.viz import add_scene_cam, CAM_COLORS, OPENGL, pts3d_to_trimesh, cat_meshes
 
 
 def get_args_parser():
@@ -203,8 +207,33 @@ def set_scenegraph_options(inputfiles, winsize, refid, scenegraph_type):
     return winsize, refid
 
 
+def download_to_colmap_zip(tmp_folder: str, scene: BasePCOptimizer, min_conf_thr):
+    tmp_folder = Path(tmp_folder) / "colmap"
+    if tmp_folder.exists():
+        print("Deleting old colmap stuff not implemented yet")
+    else:
+        tmp_folder.mkdir(exist_ok=False, parents=False)
+
+    save_to_colmap(tmp_folder, scene, min_conf_thr=min_conf_thr)
+
+    colmap_zip_path = tmp_folder.parent / "colmap.zip"
+
+    with ZipFile(colmap_zip_path, "w", ZIP_DEFLATED) as zipf:
+        # Walk through the tmp folder
+        for root, dirs, files in os.walk(tmp_folder):
+            for file in files:
+                # Create a relative path for each file
+                file_path = Path(root) / file
+                arcname = file_path.relative_to(tmp_folder)
+                # Write the file into the ZIP file
+                zipf.write(file_path, arcname)
+
+    return str(colmap_zip_path.absolute())
+
+
 def main_demo(tmpdirname, model, device, image_size, server_name, server_port, silent=False):
     recon_fun = functools.partial(get_reconstructed_scene, tmpdirname, model, device, silent, image_size)
+    download_colmap_fun = functools.partial(download_to_colmap_zip, tmpdirname)
     model_from_scene_fun = functools.partial(get_3D_model_from_scene, tmpdirname, silent)
     with gradio.Blocks(css=""".gradio-container {margin: 0 !important; min-width: 100%};""", title="DUSt3R Demo") as demo:
         # scene state is save so that you can change conf_thr, cam_size... without rerunning the inference
@@ -244,6 +273,12 @@ def main_demo(tmpdirname, model, device, image_size, server_name, server_port, s
             outmodel = gradio.Model3D()
             outgallery = gradio.Gallery(label='rgb,depth,confidence', columns=3, height="100%")
 
+            pack_colmap_btn = gradio.DownloadButton("Pack in COLMAP format", interactive=True, visible=True,
+                                                    value="colmap.zip")
+            colmap_file = gradio.File(label="Output File",
+                                      file_count="single",
+                                      file_types=[".zip"])
+
             # events
             scenegraph_type.change(set_scenegraph_options,
                                    inputs=[inputfiles, winsize, refid, scenegraph_type],
@@ -256,6 +291,10 @@ def main_demo(tmpdirname, model, device, image_size, server_name, server_port, s
                                   mask_sky, clean_depth, transparent_cams, cam_size,
                                   scenegraph_type, winsize, refid],
                           outputs=[scene, outmodel, outgallery])
+
+            pack_colmap_btn.click(fn=download_colmap_fun,
+                                  inputs=[scene, min_conf_thr],
+                                  outputs=colmap_file)
             min_conf_thr.release(fn=model_from_scene_fun,
                                  inputs=[scene, min_conf_thr, as_pointcloud, mask_sky,
                                          clean_depth, transparent_cams, cam_size],

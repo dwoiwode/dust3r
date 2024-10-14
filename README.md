@@ -1,5 +1,8 @@
 ![demo](assets/dust3r.jpg)
 
+> [!WARNING]
+> This fork adds a COLMAP export to the demo interface
+
 Official implementation of `DUSt3R: Geometric 3D Vision Made Easy`  
 [[Project page](https://dust3r.europe.naverlabs.com/)], [[DUSt3R arxiv](https://arxiv.org/abs/2312.14132)]  
 
